@@ -1,6 +1,6 @@
 import { ApiErrorResponse } from './types';
 
-const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const REQUEST_TIMEOUT_MS = 15000; // 15s timeout
 const MAX_RETRIES = 2;
 
@@ -57,7 +57,6 @@ export async function callGeminiApi(
       },
     ],
     generationConfig: {
-      temperature: 0.2,
       maxOutputTokens: 2048,
     },
   };
