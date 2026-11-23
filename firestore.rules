@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // User profile and subcollections: Strictly isolated to the authenticated user
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      // Subcollection: Household Demographics & Vulnerabilities
+      match /household/{memberId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Subcollection: Personal Clean Air Habits & Commute Logs
+      match /habits/{habitId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // Subcollection: Assistant Conversation Sessions
+      match /chats/{chatId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+        
+        match /messages/{messageId} {
+          allow read, write: if request.auth != null && request.auth.uid == userId;
+        }
+      }
+    }
+
+    // Cached Environmental Telemetry: Read-only for clients, written by backend only
+    match /aqi_cache/{geohashKey} {
+      allow read: if true;
+      allow write: if false; // Only backend admin SDK can update cache
+    }
+
+    // Default deny for all unspecified paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
