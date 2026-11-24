@@ -117,6 +117,37 @@ try {
   assert(false, `api/recommendations.js failed to load: ${err.message}`);
 }
 
+// -----------------------------------------------------------------------------
+// 3. AUTH & JWT DEPENDENCY INTEROPERABILITY CHECKS (ERR_REQUIRE_ESM REGRESSION)
+// -----------------------------------------------------------------------------
+console.log('\n--- 3. AUTH & JWT DEPENDENCY INTEROPERABILITY CHECKS ---');
+
+try {
+  const authModule = await import('../api/_lib/auth.js');
+  assert(
+    typeof authModule.verifyFirebaseToken === 'function',
+    'api/_lib/auth.js: Dynamically resolves and exports verifyFirebaseToken'
+  );
+
+  // Exercise getFirebaseAuth to verify firebase-admin and its transitive dependencies (jwks-rsa, jose)
+  const authInstance = authModule.getFirebaseAuth('test-project-esm-check');
+  assert(
+    authInstance !== null && typeof authInstance.verifyIdToken === 'function',
+    'firebase-admin/auth: Successfully initialized and verifyIdToken is callable without ERR_REQUIRE_ESM'
+  );
+
+  // Test that jwks-rsa and jose can be required synchronously without ERR_REQUIRE_ESM
+  const { createRequire } = await import('module');
+  const require = createRequire(import.meta.url);
+  const jwks = require('jwks-rsa');
+  assert(
+    typeof jwks === 'function',
+    'jwks-rsa: CommonJS require() resolves without ERR_REQUIRE_ESM (jose is CJS-compatible)'
+  );
+} catch (err: any) {
+  assert(false, `Authentication dependency loading failed: ${err.message}`);
+}
+
 console.log('\n===============================================================');
 console.log(`IMPORT RESOLUTION AUDIT: ${testsPassed} PASSED, ${testsFailed} FAILED`);
 console.log('===============================================================\n');
