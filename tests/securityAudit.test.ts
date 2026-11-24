@@ -477,6 +477,73 @@ try {
     resRejected403.error?.error === 'Access denied by Gemini API. Check API project permissions, API restrictions, or billing setup.',
     'Google returning HTTP 403: Returns safe access-denied message'
   );
+
+  // Test 3.9: Network failure diagnostic metadata logging & secret redaction
+  const originalWarn = console.warn;
+  const loggedWarns: string[] = [];
+  console.warn = (...args: any[]) => {
+    loggedWarns.push(args.join(' '));
+  };
+
+  try {
+    const sensitiveKey = 'AIzaSy_SecretDiagnosticKey_AuditSuite';
+    process.env.GEMINI_API_KEY = sensitiveKey;
+    const sensitiveRawMsg = 'ECONNREFUSED connect 127.0.0.1:443';
+
+    globalThis.fetch = async () => {
+      const netErr = new TypeError(sensitiveRawMsg);
+      Object.assign(netErr, { code: 'ECONNREFUSED' });
+      throw netErr;
+    };
+
+    const netRes = await callGeminiApi('system secret instruction', 'user secret query');
+    assert(netRes.success === false && netRes.error?.code === 'SERVICE_UNAVAILABLE', 'Network failure: Classified as SERVICE_UNAVAILABLE');
+
+    const netLog = loggedWarns.find((log) => log.includes('[GeminiClient] Network failure:'));
+    assert(Boolean(netLog), 'Network failure: Emits sanitized diagnostic log in catch block');
+    assert(
+      Boolean(netLog?.includes('errorName=TypeError') && netLog?.includes('errorCode=ECONNREFUSED')),
+      'Network failure: Log includes safe metadata (errorName, errorCode)'
+    );
+
+    const joinedLogs = loggedWarns.join('\n');
+    assert(!joinedLogs.includes(sensitiveKey), 'Network failure: Never logs API key');
+    assert(!joinedLogs.includes(sensitiveRawMsg), 'Network failure: Never logs raw exception message');
+    assert(!joinedLogs.includes('system secret instruction'), 'Network failure: Never logs prompts');
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  // Test 3.10: Malicious alphanumeric name & uppercase code fall back to allowlist defaults
+  const loggedMaliciousAuditWarns: string[] = [];
+  console.warn = (...args: any[]) => {
+    loggedMaliciousAuditWarns.push(args.join(' '));
+  };
+
+  try {
+    process.env.GEMINI_API_KEY = 'AIzaSy_SecretDiagnosticKey_AuditSuite';
+    const sensitiveAlphanumericName = 'SensitiveTokenInErrorName'; // matches /^[A-Za-z][A-Za-z0-9]{0,39}$/
+    const sensitiveUppercaseCode = 'SENSITIVE_AUDIT_CODE'; // matches /^[A-Z0-9_]{3,20}$/
+
+    globalThis.fetch = async () => {
+      const errWithBadProps = new Error('generic message');
+      errWithBadProps.name = sensitiveAlphanumericName;
+      (errWithBadProps as any).code = sensitiveUppercaseCode;
+      throw errWithBadProps;
+    };
+
+    const resBadProps = await callGeminiApi('system prompt', 'user message');
+    assert(resBadProps.success === false, 'Alphanumeric malicious values: Returns failure');
+
+    const badPropsLog = loggedMaliciousAuditWarns.find((log) => log.includes('[GeminiClient] Network failure:'));
+    assert(Boolean(badPropsLog), 'Alphanumeric malicious values: Emits diagnostic log');
+    assert(Boolean(badPropsLog?.includes('errorName=Error')), 'Alphanumeric malicious name: Strictly falls back to errorName=Error');
+    assert(Boolean(badPropsLog?.includes('errorCode=NETWORK_ERROR')), 'Uppercase malicious code: Strictly falls back to errorCode=NETWORK_ERROR');
+    assert(!badPropsLog?.includes(sensitiveAlphanumericName), 'Alphanumeric malicious name: Never leaks into logs');
+    assert(!badPropsLog?.includes(sensitiveUppercaseCode), 'Uppercase malicious code: Never leaks into logs');
+  } finally {
+    console.warn = originalWarn;
+  }
 } finally {
   // Reliable restoration of global fetch and environment
   globalThis.fetch = originalFetchBeforeSection3;

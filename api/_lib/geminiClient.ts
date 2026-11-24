@@ -4,6 +4,25 @@ const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const REQUEST_TIMEOUT_MS = 15000; // 15s timeout
 const MAX_RETRIES = 2;
 
+// Strict allowlists for diagnostic log sanitization to prevent sensitive string leakage
+const ALLOWED_ERROR_NAMES = new Set([
+  'Error',
+  'TypeError',
+  'AbortError',
+  'AggregateError',
+]);
+
+const ALLOWED_ERROR_CODES = new Set([
+  'ENOTFOUND',
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EPIPE',
+]);
+
 export interface GeminiCallResult {
   success: boolean;
   text?: string;
@@ -223,7 +242,24 @@ export async function callGeminiApi(
         },
       };
     } catch (err: any) {
-      if (err.name === 'AbortError') {
+      const elapsedMs = Date.now() - startTime;
+      const isTimeout = err?.name === 'AbortError';
+      const rawErrorName = typeof err?.name === 'string' ? err.name : '';
+      const safeErrorName = ALLOWED_ERROR_NAMES.has(rawErrorName)
+        ? rawErrorName
+        : 'Error';
+      const rawCode = typeof err?.code === 'string' ? err.code : (typeof err?.cause?.code === 'string' ? err.cause.code : undefined);
+      // Explicit allowlist of known network error codes to prevent any sensitive string leakage
+      const safeErrorCode = typeof rawCode === 'string' && ALLOWED_ERROR_CODES.has(rawCode)
+        ? rawCode
+        : (isTimeout && !rawCode ? 'ETIMEDOUT' : 'NETWORK_ERROR');
+
+      // Safe diagnostic log: strictly metadata only, never raw messages, keys, prompts, or bodies
+      console.warn(
+        `[GeminiClient] Network failure: attempt=${attempt + 1}/${MAX_RETRIES + 1} duration=${elapsedMs}ms errorName=${safeErrorName} errorCode=${safeErrorCode} isTimeout=${isTimeout}`
+      );
+
+      if (isTimeout) {
         return {
           success: false,
           model,

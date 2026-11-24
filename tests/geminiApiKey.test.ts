@@ -261,6 +261,102 @@ try {
     'Google access denied (HTTP 403): Never exposes raw upstream error message'
   );
 
+  // Subtest 2.10: Network failure diagnostic logging & secret redaction
+  const originalWarn = console.warn;
+  const loggedWarns: string[] = [];
+  console.warn = (...args: any[]) => {
+    loggedWarns.push(args.join(' '));
+  };
+
+  try {
+    const sensitiveSecretKey = 'AIzaSy_SuperSecret_DiagnosticKey_999';
+    process.env.GEMINI_API_KEY = sensitiveSecretKey;
+    const sensitiveRawErrorMessage = 'DNS resolution failed at gateway host 10.0.0.1';
+
+    globalThis.fetch = async () => {
+      const netErr = new TypeError(sensitiveRawErrorMessage);
+      Object.assign(netErr, { code: 'ENOTFOUND' });
+      throw netErr;
+    };
+
+    const netFailureRes = await callGeminiApi('sensitive system prompt', 'sensitive user message');
+    assert(netFailureRes.success === false, 'Network failure: Returns failure');
+    assert(netFailureRes.error?.code === 'SERVICE_UNAVAILABLE', 'Network failure: Error code is SERVICE_UNAVAILABLE');
+
+    // Verify diagnostic logs were produced
+    const networkLog = loggedWarns.find((log) => log.includes('[GeminiClient] Network failure:'));
+    assert(Boolean(networkLog), 'Network failure: Emits diagnostic log in catch block');
+    assert(
+      Boolean(networkLog?.includes('errorName=TypeError') && networkLog?.includes('errorCode=ENOTFOUND') && networkLog?.includes('isTimeout=false')),
+      'Network failure: Log contains sanitized metadata (errorName, errorCode, isTimeout)'
+    );
+
+    // Verify secrecy: no keys, raw error messages, or prompt content in logs
+    const allLogsJoined = loggedWarns.join('\n');
+    assert(!allLogsJoined.includes(sensitiveSecretKey), 'Network failure: API key is never logged');
+    assert(!allLogsJoined.includes(sensitiveRawErrorMessage), 'Network failure: Raw exception message is never logged');
+    assert(!allLogsJoined.includes('sensitive system prompt') && !allLogsJoined.includes('sensitive user message'), 'Network failure: Prompts are never logged');
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  // Subtest 2.11: Timeout failure diagnostic logging
+  const loggedTimeoutWarns: string[] = [];
+  console.warn = (...args: any[]) => {
+    loggedTimeoutWarns.push(args.join(' '));
+  };
+
+  try {
+    process.env.GEMINI_API_KEY = 'AIzaSy_TimeoutTestKey_111';
+    globalThis.fetch = async () => {
+      const abortErr = new Error('The operation was aborted');
+      abortErr.name = 'AbortError';
+      throw abortErr;
+    };
+
+    const timeoutRes = await callGeminiApi('system prompt', 'user message');
+    assert(timeoutRes.success === false && timeoutRes.error?.code === 'REQUEST_TIMEOUT', 'Timeout: Returns REQUEST_TIMEOUT code');
+    const timeoutLog = loggedTimeoutWarns.find((log) => log.includes('[GeminiClient] Network failure:'));
+    assert(
+      Boolean(timeoutLog?.includes('errorName=AbortError') && timeoutLog?.includes('isTimeout=true')),
+      'Timeout: Log accurately records AbortError and isTimeout=true'
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  // Subtest 2.12: Malicious alphanumeric/uppercase values (passing old regexes) fall back to allowlist defaults
+  const loggedMaliciousWarns: string[] = [];
+  console.warn = (...args: any[]) => {
+    loggedMaliciousWarns.push(args.join(' '));
+  };
+
+  try {
+    process.env.GEMINI_API_KEY = 'AIzaSy_ValidKey_MaliciousValuesTest';
+    // Both values are entirely alphanumeric / uppercase and would pass character-class regexes
+    const sensitiveAlphanumericName = 'SensitiveSecretTokenInErrorName'; // matches /^[A-Za-z][A-Za-z0-9]{0,39}$/
+    const sensitiveUppercaseCode = 'SENSITIVE_KEY_CODE'; // matches /^[A-Z0-9_]{3,20}$/
+
+    globalThis.fetch = async () => {
+      const customErr = new Error('Some error');
+      customErr.name = sensitiveAlphanumericName;
+      (customErr as any).code = sensitiveUppercaseCode;
+      throw customErr;
+    };
+
+    const maliciousNameRes = await callGeminiApi('system prompt', 'user message');
+    assert(maliciousNameRes.success === false, 'Alphanumeric malicious values: Returns failure');
+
+    const logEntry = loggedMaliciousWarns.find((log) => log.includes('[GeminiClient] Network failure:'));
+    assert(Boolean(logEntry), 'Alphanumeric malicious values: Emits diagnostic log');
+    assert(Boolean(logEntry?.includes('errorName=Error')), 'Alphanumeric malicious name: Falls back strictly to errorName=Error');
+    assert(Boolean(logEntry?.includes('errorCode=NETWORK_ERROR')), 'Uppercase malicious code: Falls back strictly to errorCode=NETWORK_ERROR');
+    assert(!logEntry?.includes(sensitiveAlphanumericName), 'Alphanumeric malicious name: Never leaks into logs');
+    assert(!logEntry?.includes(sensitiveUppercaseCode), 'Uppercase malicious code: Never leaks into logs');
+  } finally {
+    console.warn = originalWarn;
+  }
+
 } finally {
   // Restore environment and fetch
   if (originalEnvKey !== undefined) {
