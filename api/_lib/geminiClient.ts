@@ -1,4 +1,4 @@
-import { ApiErrorResponse } from './types';
+import { ApiErrorResponse } from './types.js';
 
 const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 const REQUEST_TIMEOUT_MS = 15000; // 15s timeout

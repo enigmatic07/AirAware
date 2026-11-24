@@ -1,9 +1,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getClientIp, checkRateLimit } from './_lib/rateLimiter';
-import { parseJsonBody, validateRecommendationsRequest } from './_lib/validator';
-import { callGeminiApi } from './_lib/geminiClient';
-import { verifyFirebaseToken } from './_lib/auth';
-import { ApiErrorResponse, ApiSuccessResponse } from './_lib/types';
+import { getClientIp, checkRateLimit } from './_lib/rateLimiter.js';
+import { parseJsonBody, validateRecommendationsRequest } from './_lib/validator.js';
+import { callGeminiApi } from './_lib/geminiClient.js';
+import { verifyFirebaseToken } from './_lib/auth.js';
+import type { ApiErrorResponse, ApiSuccessResponse } from './_lib/types.js';
 
 const RECOMMENDATIONS_SCHEMA = {
   type: 'object',

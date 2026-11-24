@@ -1,6 +1,6 @@
 import * as crypto from 'crypto';
-import { checkRateLimit, resetInMemoryStore } from '../api/_lib/rateLimiter';
-import { verifyFirebaseToken } from '../api/_lib/auth';
+import { checkRateLimit, resetInMemoryStore } from '../api/_lib/rateLimiter.js';
+import { verifyFirebaseToken } from '../api/_lib/auth.js';
 
 console.log('===============================================================');
 console.log('       AIRAWARE PRODUCTION SECURITY & AUDIT TEST SUITE         ');

@@ -1,4 +1,4 @@
-import { AssistantRequestBody, RecommendationsRequestBody } from './types';
+import type { AssistantRequestBody, RecommendationsRequestBody } from './types.js';
 
 const MAX_BODY_BYTES = 64 * 1024; // 64 KB limit to prevent DoS
 
