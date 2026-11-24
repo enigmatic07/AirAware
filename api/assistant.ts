@@ -108,12 +108,14 @@ Guidelines:
 
   if (!result.success || !result.text) {
     const statusMap: Record<string, number> = {
-      SERVER_KEY_MISSING: 500,
+      INVALID_PAYLOAD: 400,
       INVALID_API_KEY: 401,
+      ACCESS_DENIED: 403,
       QUOTA_EXCEEDED: 429,
+      SERVER_KEY_MISSING: 500,
+      INVALID_AI_RESPONSE: 502,
       SERVICE_UNAVAILABLE: 503,
       REQUEST_TIMEOUT: 504,
-      INVALID_AI_RESPONSE: 502,
     };
     const statusCode = statusMap[result.error?.code || ''] || 500;
     return res.status(statusCode).json(result.error);

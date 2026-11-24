@@ -11,6 +11,7 @@ export interface ApiErrorResponse {
   code: 
     | 'SERVER_KEY_MISSING'
     | 'INVALID_API_KEY'
+    | 'ACCESS_DENIED'
     | 'QUOTA_EXCEEDED'
     | 'RATE_LIMITED'
     | 'SERVICE_UNAVAILABLE'

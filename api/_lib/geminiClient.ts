@@ -12,6 +12,22 @@ export interface GeminiCallResult {
 }
 
 /**
+ * Sanitizes and extracts the API key from environment variables.
+ * Trims whitespace and strips matching outer quotation marks (single or double).
+ */
+export function sanitizeApiKey(rawKey?: string): string | undefined {
+  if (!rawKey) return undefined;
+  let key = rawKey.trim();
+  if (
+    (key.startsWith('"') && key.endsWith('"') && key.length >= 2) ||
+    (key.startsWith("'") && key.endsWith("'") && key.length >= 2)
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+  return key.length > 0 ? key : undefined;
+}
+
+/**
  * Executes a call to Google Gemini with retry logic, timeouts, and sanitized errors.
  */
 export async function callGeminiApi(
@@ -19,7 +35,7 @@ export async function callGeminiApi(
   userPrompt: string,
   responseSchema?: any
 ): Promise<GeminiCallResult> {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  const apiKey = sanitizeApiKey(process.env.GEMINI_API_KEY);
   const model = DEFAULT_MODEL;
 
   if (!apiKey) {
@@ -30,19 +46,6 @@ export async function callGeminiApi(
         success: false,
         error: 'Server configuration error: GEMINI_API_KEY is not configured on the backend.',
         code: 'SERVER_KEY_MISSING',
-      },
-    };
-  }
-
-  // Pre-validate key format: AI Studio keys start with AIzaSy
-  if (!apiKey.startsWith('AIzaSy')) {
-    return {
-      success: false,
-      model,
-      error: {
-        success: false,
-        error: 'Server configuration error: The configured GEMINI_API_KEY has an invalid format. Valid Google AI Studio keys start with "AIzaSy".',
-        code: 'INVALID_API_KEY',
       },
     };
   }
@@ -83,7 +86,6 @@ export async function callGeminiApi(
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
       const durationMs = Date.now() - startTime;
 
       if (response.ok) {
@@ -102,25 +104,16 @@ export async function callGeminiApi(
           };
         }
 
-        // Safe telemetry log: no PII or keys
+        // Safe telemetry log: only metadata, no PII, keys, or prompt content
         console.log(`[GeminiClient] Success: model=${model} duration=${durationMs}ms`);
         return { success: true, text, model };
       }
 
-      // Handle non-200 responses
+      // Handle non-200 responses: log only safe metadata (HTTP status and duration)
       const status = response.status;
-      let errorDetails = '';
-      try {
-        const errJson = await response.json();
-        errorDetails = errJson.error?.message || response.statusText;
-      } catch {
-        errorDetails = response.statusText;
-      }
+      console.warn(`[GeminiClient] Upstream HTTP ${status} (duration=${durationMs}ms)`);
 
-      console.warn(`[GeminiClient] Upstream HTTP ${status}: ${errorDetails.slice(0, 100)}`);
-
-      // Handle specific HTTP codes
-      if (status === 400 || status === 401) {
+      if (status === 401) {
         return {
           success: false,
           model,
@@ -132,14 +125,52 @@ export async function callGeminiApi(
         };
       }
 
+      if (status === 400) {
+        let isApiKeyError = false;
+        try {
+          const errJson: any = await response.json();
+          const message: string = typeof errJson?.error?.message === 'string' ? errJson.error.message : '';
+          const details: any[] = Array.isArray(errJson?.error?.details) ? errJson.error.details : [];
+          const hasApiKeyReason = details.some((d: any) => d?.reason === 'API_KEY_INVALID');
+          const hasApiKeyMessage = message.includes('API key not valid') || message.includes('API_KEY_INVALID');
+          if (hasApiKeyReason || hasApiKeyMessage) {
+            isApiKeyError = true;
+          }
+        } catch {
+          // Default to non-key request error if body cannot be parsed as JSON
+        }
+
+        if (isApiKeyError) {
+          return {
+            success: false,
+            model,
+            error: {
+              success: false,
+              error: 'Authentication failed with the Gemini API service. Please verify server credentials.',
+              code: 'INVALID_API_KEY',
+            },
+          };
+        }
+
+        return {
+          success: false,
+          model,
+          error: {
+            success: false,
+            error: 'Invalid request sent to the Gemini API service. Please verify request parameters.',
+            code: 'INVALID_PAYLOAD',
+          },
+        };
+      }
+
       if (status === 403) {
         return {
           success: false,
           model,
           error: {
             success: false,
-            error: 'Access denied by Gemini API. Check API project permissions or billing setup.',
-            code: 'INVALID_API_KEY',
+            error: 'Access denied by Gemini API. Check API project permissions, API restrictions, or billing setup.',
+            code: 'ACCESS_DENIED',
           },
         };
       }
@@ -192,7 +223,6 @@ export async function callGeminiApi(
         },
       };
     } catch (err: any) {
-      clearTimeout(timeoutId);
       if (err.name === 'AbortError') {
         return {
           success: false,
@@ -222,6 +252,8 @@ export async function callGeminiApi(
           code: 'SERVICE_UNAVAILABLE',
         },
       };
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

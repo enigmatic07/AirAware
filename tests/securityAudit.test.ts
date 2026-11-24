@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import { checkRateLimit, resetInMemoryStore } from '../api/_lib/rateLimiter.js';
 import { verifyFirebaseToken } from '../api/_lib/auth.js';
+import { callGeminiApi, sanitizeApiKey } from '../api/_lib/geminiClient.js';
 
 console.log('===============================================================');
 console.log('       AIRAWARE PRODUCTION SECURITY & AUDIT TEST SUITE         ');
@@ -339,6 +340,152 @@ assert(
   resValid.authenticated === true && resValid.uid === 'user_legit_100' && resValid.email === 'user@example.com',
   'Cryptographic signature check: Valid signed token with matching claims is authenticated successfully'
 );
+
+// =============================================================================
+// SECTION 3: GEMINI API KEY VALIDATION & CREDENTIAL SECURITY TESTS
+// =============================================================================
+console.log('\n--- SECTION 3: GEMINI API KEY VALIDATION & CREDENTIAL SECURITY TESTS ---');
+
+const originalFetchBeforeSection3 = globalThis.fetch;
+const savedApiKey = process.env.GEMINI_API_KEY;
+
+try {
+  // Test 3.1: Missing API key
+  delete process.env.GEMINI_API_KEY;
+  let geminiFetchCalled = false;
+  globalThis.fetch = async () => {
+    geminiFetchCalled = true;
+    return new Response('{}', { status: 200 });
+  };
+
+  const resMissingKey = await callGeminiApi('system prompt', 'user message');
+  assert(
+    resMissingKey.success === false && resMissingKey.error?.code === 'SERVER_KEY_MISSING',
+    'Missing API key: Returns SERVER_KEY_MISSING error without network call'
+  );
+  assert(!geminiFetchCalled, 'Missing API key: Upstream fetch was not called');
+
+  // Test 3.2: Empty / Whitespace-only API key
+  process.env.GEMINI_API_KEY = '   ';
+  geminiFetchCalled = false;
+  const resEmptyKey = await callGeminiApi('system prompt', 'user message');
+  assert(
+    resEmptyKey.success === false && resEmptyKey.error?.code === 'SERVER_KEY_MISSING',
+    'Empty/whitespace API key: Safely rejected with SERVER_KEY_MISSING'
+  );
+  assert(!geminiFetchCalled, 'Empty/whitespace API key: Upstream fetch was not called');
+
+  // Test 3.3: Accidental surrounding quotes (single and double quotes)
+  assert(sanitizeApiKey('"AIzaSyKey_Test"') === 'AIzaSyKey_Test', 'Sanitizer strips outer double quotes');
+  assert(sanitizeApiKey("'AIzaSyKey_Test'") === 'AIzaSyKey_Test', 'Sanitizer strips outer single quotes');
+  assert(sanitizeApiKey('  "AIzaSyKey_Padded"  ') === 'AIzaSyKey_Padded', 'Sanitizer strips outer quotes and trims');
+
+  process.env.GEMINI_API_KEY = '"AIzaSy_QuotedCredential_123"';
+  let capturedHeaderKey: string | null = null;
+  globalThis.fetch = async (_url: RequestInfo | URL, init?: RequestInit) => {
+    geminiFetchCalled = true;
+    capturedHeaderKey = (init?.headers as Record<string, string>)?.[('x-goog-api-key')];
+    return new Response(
+      JSON.stringify({ candidates: [{ content: { parts: [{ text: 'Response OK' }] } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  geminiFetchCalled = false;
+  const resQuoted = await callGeminiApi('system prompt', 'user message');
+  assert(resQuoted.success === true, 'Accidental surrounding quotes: Dispatches successfully');
+  assert(capturedHeaderKey === 'AIzaSy_QuotedCredential_123', 'Accidental surrounding quotes: Stripped before transmission');
+
+  // Test 3.4: Key starting with AIza but not AIzaSy
+  process.env.GEMINI_API_KEY = 'AIzaNA_AlternativePrefixFormat_456';
+  geminiFetchCalled = false;
+  capturedHeaderKey = null;
+  const resNonSy = await callGeminiApi('system prompt', 'user message');
+  assert(resNonSy.success === true, 'Key with alternative prefix (AIza non-Sy): Dispatches successfully without client rejection');
+  assert(capturedHeaderKey === 'AIzaNA_AlternativePrefixFormat_456', 'Key with alternative prefix: Sent to Google API');
+
+  // Test 3.5: Google rejecting with HTTP 401 (Authentication failure)
+  const invalidKeyAttempt = 'AIzaSy_InvalidKey_789';
+  process.env.GEMINI_API_KEY = invalidKeyAttempt;
+  globalThis.fetch = async () => {
+    return new Response(
+      JSON.stringify({ error: { code: 401, message: 'Request had invalid authentication credentials.', status: 'UNAUTHENTICATED' } }),
+      { status: 401, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  const resRejected401 = await callGeminiApi('system prompt', 'user message');
+  assert(resRejected401.success === false, 'Google rejecting key (HTTP 401): Returns success=false');
+  assert(resRejected401.error?.code === 'INVALID_API_KEY', 'Google rejecting key (HTTP 401): Mapped to INVALID_API_KEY');
+  assert(
+    resRejected401.error?.error === 'Authentication failed with the Gemini API service. Please verify server credentials.',
+    'Google rejecting key (HTTP 401): Returns safe error message'
+  );
+  assert(!JSON.stringify(resRejected401).includes(invalidKeyAttempt), 'Google rejecting key (HTTP 401): Never exposes credential in response');
+
+  // Test 3.6: Google HTTP 400 with structured invalid API-key response
+  globalThis.fetch = async () => {
+    return new Response(
+      JSON.stringify({
+        error: {
+          code: 400,
+          message: 'API key not valid. Please pass a valid API key.',
+          status: 'INVALID_ARGUMENT',
+          details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: 'API_KEY_INVALID' }],
+        },
+      }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  const resRejected400Key = await callGeminiApi('system prompt', 'user message');
+  assert(resRejected400Key.success === false, 'Google HTTP 400 (API_KEY_INVALID): Returns success=false');
+  assert(resRejected400Key.error?.code === 'INVALID_API_KEY', 'Google HTTP 400 (API_KEY_INVALID): Mapped to INVALID_API_KEY');
+  assert(
+    resRejected400Key.error?.error === 'Authentication failed with the Gemini API service. Please verify server credentials.',
+    'Google HTTP 400 (API_KEY_INVALID): Returns safe auth error message'
+  );
+
+  // Test 3.7: Google HTTP 400 with generic invalid payload / parameters
+  globalThis.fetch = async () => {
+    return new Response(
+      JSON.stringify({ error: { code: 400, message: 'Invalid JSON payload.', status: 'INVALID_ARGUMENT' } }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  const resRejected400Payload = await callGeminiApi('system prompt', 'user message');
+  assert(resRejected400Payload.success === false, 'Google HTTP 400 (malformed payload): Returns success=false');
+  assert(resRejected400Payload.error?.code === 'INVALID_PAYLOAD', 'Google HTTP 400 (malformed payload): Mapped to INVALID_PAYLOAD');
+  assert(
+    resRejected400Payload.error?.error === 'Invalid request sent to the Gemini API service. Please verify request parameters.',
+    'Google HTTP 400 (malformed payload): Returns safe request-error message'
+  );
+
+  // Test 3.8: Google rejecting with HTTP 403 (Permission / Access denied)
+  globalThis.fetch = async () => {
+    return new Response(
+      JSON.stringify({ error: { code: 403, message: 'The caller does not have permission.', status: 'PERMISSION_DENIED' } }),
+      { status: 403, headers: { 'Content-Type': 'application/json' } }
+    );
+  };
+
+  const resRejected403 = await callGeminiApi('system prompt', 'user message');
+  assert(resRejected403.success === false, 'Google returning HTTP 403: Returns success=false');
+  assert(resRejected403.error?.code === 'ACCESS_DENIED', 'Google returning HTTP 403: Mapped to ACCESS_DENIED');
+  assert(
+    resRejected403.error?.error === 'Access denied by Gemini API. Check API project permissions, API restrictions, or billing setup.',
+    'Google returning HTTP 403: Returns safe access-denied message'
+  );
+} finally {
+  // Reliable restoration of global fetch and environment
+  globalThis.fetch = originalFetchBeforeSection3;
+  if (savedApiKey !== undefined) {
+    process.env.GEMINI_API_KEY = savedApiKey;
+  } else {
+    delete process.env.GEMINI_API_KEY;
+  }
+}
 
 console.log('\n===============================================================');
 console.log(`AUDIT RESULTS: ${testsPassed} PASSED, ${testsFailed} FAILED`);
