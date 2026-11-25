@@ -130,7 +130,7 @@ export const DailyRoutineView: React.FC = () => {
               {routinePlan.source === 'gemini' ? (
                 <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-teal-500/10 text-teal-300 border border-teal-500/30 flex items-center gap-1.5 whitespace-nowrap">
                   <Sparkles className="w-3 h-3 text-teal-400" />
-                  Live {routinePlan.model || 'Gemini 2.0 Flash'}
+                  Live {routinePlan.model || 'Gemini 3.8 Flash'}
                 </span>
               ) : (
                 <span

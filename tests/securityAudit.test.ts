@@ -348,6 +348,7 @@ console.log('\n--- SECTION 3: GEMINI API KEY VALIDATION & CREDENTIAL SECURITY TE
 
 const originalFetchBeforeSection3 = globalThis.fetch;
 const savedApiKey = process.env.GEMINI_API_KEY;
+const savedModel = process.env.GEMINI_MODEL;
 
 try {
   // Test 3.1: Missing API key
@@ -544,6 +545,172 @@ try {
   } finally {
     console.warn = originalWarn;
   }
+
+  // Test 3.11: Configured GEMINI_MODEL is reported in diagnostic log and returned in result
+  const originalLogSection3 = console.log;
+  const auditLoggedLines: string[] = [];
+  console.log = (...args: any[]) => {
+    auditLoggedLines.push(args.join(' '));
+  };
+
+  try {
+    process.env.GEMINI_API_KEY = 'AIzaSy_ValidKey_ModelAuditTest';
+    process.env.GEMINI_MODEL = 'gemini-3.6-flash';
+    let requestedUrl = '';
+
+    globalThis.fetch = async (url: any) => {
+      requestedUrl = String(url);
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'Response OK' }] } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    };
+
+    const resAuditModel = await callGeminiApi('system prompt', 'user message');
+    assert(resAuditModel.success === true, 'Configured GEMINI_MODEL: Request succeeds');
+    assert(resAuditModel.model === 'gemini-3.6-flash', 'Configured GEMINI_MODEL: Model returned in result');
+    assert(
+      requestedUrl.includes('/models/gemini-3.6-flash:generateContent'),
+      'Configured GEMINI_MODEL: Sent to correct model endpoint'
+    );
+
+    const modelLog = auditLoggedLines.find((l) => l.includes('[GeminiClient] Active model:'));
+    assert(Boolean(modelLog), 'Configured GEMINI_MODEL: Emits Active model log');
+    assert(
+      Boolean(modelLog?.includes('Active model: gemini-3.6-flash')),
+      'Configured GEMINI_MODEL: Accurately logs active model identifier'
+    );
+  } finally {
+    console.log = originalLogSection3;
+  }
+
+  // Test 3.12: Absent GEMINI_MODEL defaults safely to gemini-3.8-flash
+  const auditLoggedLinesDefault: string[] = [];
+  console.log = (...args: any[]) => {
+    auditLoggedLinesDefault.push(args.join(' '));
+  };
+
+  try {
+    process.env.GEMINI_API_KEY = 'AIzaSy_ValidKey_ModelAuditTest';
+    delete process.env.GEMINI_MODEL;
+    let requestedDefaultUrl = '';
+
+    globalThis.fetch = async (url: any) => {
+      requestedDefaultUrl = String(url);
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'Response OK' }] } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    };
+
+    const resAuditDefault = await callGeminiApi('system prompt', 'user message');
+    assert(resAuditDefault.success === true, 'Absent GEMINI_MODEL: Request succeeds');
+    assert(resAuditDefault.model === 'gemini-3.8-flash', 'Absent GEMINI_MODEL: Defaults to gemini-3.8-flash');
+    assert(
+      requestedDefaultUrl.includes('/models/gemini-3.8-flash:generateContent'),
+      'Absent GEMINI_MODEL: Sent to default model endpoint'
+    );
+
+    const defaultLog = auditLoggedLinesDefault.find((l) => l.includes('[GeminiClient] Active model:'));
+    assert(Boolean(defaultLog), 'Absent GEMINI_MODEL: Emits Active model log');
+    assert(
+      Boolean(defaultLog?.includes('Active model: gemini-3.8-flash')),
+      'Absent GEMINI_MODEL: Accurately logs default model'
+    );
+  } finally {
+    console.log = originalLogSection3;
+  }
+
+  // Test 3.13: Arbitrary / sensitive content in GEMINI_MODEL is rejected and never logged
+  const auditLoggedLinesSensitive: string[] = [];
+  console.log = (...args: any[]) => {
+    auditLoggedLinesSensitive.push(args.join(' '));
+  };
+  const originalWarnSection3 = console.warn;
+  const auditLoggedWarnsSensitive: string[] = [];
+  console.warn = (...args: any[]) => {
+    auditLoggedWarnsSensitive.push(args.join(' '));
+  };
+
+  try {
+    const sensitiveModelToken = 'AIzaSy_SecretApiKeyInModelEnv_AuditTest==inject';
+    process.env.GEMINI_API_KEY = 'AIzaSy_ValidKey_ModelAuditTest';
+    process.env.GEMINI_MODEL = sensitiveModelToken;
+
+    globalThis.fetch = async () => {
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'Response OK' }] } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    };
+
+    const resAuditSensitive = await callGeminiApi('system prompt', 'user message');
+    assert(resAuditSensitive.success === true, 'Sensitive GEMINI_MODEL: Safely handled');
+    assert(resAuditSensitive.model === 'gemini-3.8-flash', 'Sensitive GEMINI_MODEL: Falls back to default model');
+
+    const joinedAuditLogs = auditLoggedLinesSensitive.join('\n');
+    assert(!joinedAuditLogs.includes(sensitiveModelToken), 'Sensitive GEMINI_MODEL: Never exposes sensitive string in logs');
+    assert(joinedAuditLogs.includes('Active model: gemini-3.8-flash'), 'Sensitive GEMINI_MODEL: Logs safe default model');
+
+    const fallbackWarn = auditLoggedWarnsSensitive.find((l) =>
+      l.includes('[GeminiClient] Configured GEMINI_MODEL is invalid. Falling back to default model.')
+    );
+    assert(Boolean(fallbackWarn), 'Sensitive GEMINI_MODEL: Emits safe fallback warning');
+    const joinedAuditWarns = auditLoggedWarnsSensitive.join('\n');
+    assert(!joinedAuditWarns.includes(sensitiveModelToken), 'Sensitive GEMINI_MODEL: Never exposes sensitive string in warning logs');
+  } finally {
+    console.log = originalLogSection3;
+    console.warn = originalWarnSection3;
+  }
+
+  // Test 3.14: Arbitrary non-Gemini model identifiers are rejected and fall back safely
+  const auditLoggedLinesArbitrary: string[] = [];
+  console.log = (...args: any[]) => {
+    auditLoggedLinesArbitrary.push(args.join(' '));
+  };
+  const auditLoggedWarnsArbitrary: string[] = [];
+  console.warn = (...args: any[]) => {
+    auditLoggedWarnsArbitrary.push(args.join(' '));
+  };
+
+  try {
+    const arbitraryModelName = 'gpt-4o-unauthorized-arbitrary-model';
+    process.env.GEMINI_API_KEY = 'AIzaSy_ValidKey_ModelAuditTest';
+    process.env.GEMINI_MODEL = arbitraryModelName;
+
+    globalThis.fetch = async () => {
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: 'Response OK' }] } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    };
+
+    const resAuditArbitrary = await callGeminiApi('system prompt', 'user message');
+    assert(resAuditArbitrary.success === true, 'Arbitrary GEMINI_MODEL: Safely handled');
+    assert(resAuditArbitrary.model === 'gemini-3.8-flash', 'Arbitrary GEMINI_MODEL: Falls back to default model');
+
+    const joinedAuditLogs = auditLoggedLinesArbitrary.join('\n');
+    assert(!joinedAuditLogs.includes(arbitraryModelName), 'Arbitrary GEMINI_MODEL: Never exposes arbitrary string in logs');
+    assert(joinedAuditLogs.includes('Active model: gemini-3.8-flash'), 'Arbitrary GEMINI_MODEL: Logs safe default model');
+
+    const fallbackWarn = auditLoggedWarnsArbitrary.find((l) =>
+      l.includes('[GeminiClient] Configured GEMINI_MODEL is invalid. Falling back to default model.')
+    );
+    assert(Boolean(fallbackWarn), 'Arbitrary GEMINI_MODEL: Emits safe fallback warning');
+    const joinedAuditWarns = auditLoggedWarnsArbitrary.join('\n');
+    assert(!joinedAuditWarns.includes(arbitraryModelName), 'Arbitrary GEMINI_MODEL: Never exposes arbitrary string in warning logs');
+  } finally {
+    console.log = originalLogSection3;
+    console.warn = originalWarnSection3;
+  }
 } finally {
   // Reliable restoration of global fetch and environment
   globalThis.fetch = originalFetchBeforeSection3;
@@ -551,6 +718,11 @@ try {
     process.env.GEMINI_API_KEY = savedApiKey;
   } else {
     delete process.env.GEMINI_API_KEY;
+  }
+  if (savedModel !== undefined) {
+    process.env.GEMINI_MODEL = savedModel;
+  } else {
+    delete process.env.GEMINI_MODEL;
   }
 }
 

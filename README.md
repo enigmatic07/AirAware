@@ -62,7 +62,7 @@ AirAware utilizes a **Backend Proxy Architecture** powered by **Vercel Serverles
 - **Frontend**: React 18, TypeScript, Tailwind CSS, Vite
 - **Visualizations**: Recharts
 - **Backend API Gateway**: Vercel Serverless Functions (`/api/assistant.ts`, `/api/recommendations.ts`)
-- **AI Engine**: Google Gemini API (`gemini-2.0-flash`) via secure backend proxy
+- **AI Engine**: Google Gemini API (`gemini-3.8-flash`) via secure backend proxy
 - **Environmental Telemetry**: Open-Meteo Air Quality API + India CPCB / NAQI Station Standards
 - **Hosting & CI/CD**: Vercel
 
@@ -79,7 +79,7 @@ Populate your Google AI Studio API key in `.env`:
 ```ini
 # Server-side environment variable (NEVER exposed to frontend bundle)
 GEMINI_API_KEY=AIzaSyYourActualGoogleKeyHere
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MODEL=gemini-3.8-flash
 ```
 
 > [!NOTE]
@@ -100,5 +100,5 @@ Open [http://localhost:5173](http://localhost:5173). The local Vite dev middlewa
 2. Import the project into your [Vercel Dashboard](https://vercel.com).
 3. In **Project Settings > Environment Variables**, add:
    - `GEMINI_API_KEY`: Your Google AI Studio key (`AIzaSy...`)
-   - `GEMINI_MODEL`: `gemini-2.0-flash`
+   - `GEMINI_MODEL`: `gemini-3.8-flash`
 4. Click **Deploy**. Vercel will automatically compile the React frontend and deploy `/api/assistant.ts` and `/api/recommendations.ts` as serverless functions.

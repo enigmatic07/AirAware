@@ -45,7 +45,7 @@ export async function generatePersonalizedRoutine(
       return {
         ...json.data,
         source: 'gemini',
-        model: json.model || 'gemini-2.0-flash',
+        model: json.model || 'gemini-3.8-flash',
         isOfflineFallback: false,
       };
     }

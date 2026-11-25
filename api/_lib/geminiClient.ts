@@ -1,6 +1,6 @@
 import { ApiErrorResponse } from './types.js';
 
-const DEFAULT_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+export const DEFAULT_MODEL = 'gemini-3.8-flash';
 const REQUEST_TIMEOUT_MS = 15000; // 15s timeout
 const MAX_RETRIES = 2;
 
@@ -31,6 +31,47 @@ export interface GeminiCallResult {
 }
 
 /**
+ * Sanitizes and resolves the effective Gemini model identifier.
+ * Trims whitespace, strips matching outer quotation marks, and validates against safe model identifier regex.
+ * Accepts only model identifiers starting with 'gemini-', followed by alphanumeric, dot, hyphen, or underscore (8-64 chars total).
+ * Rejects sensitive arbitrary content, secrets, or non-Gemini identifiers and falls back to DEFAULT_MODEL.
+ * Emits a safe diagnostic warning when an explicitly configured model is invalid, never logging the invalid value.
+ */
+export function resolveModel(envModel?: string): string {
+  const raw = envModel !== undefined ? envModel : process.env.GEMINI_MODEL;
+  if (!raw || raw.trim().length === 0) return DEFAULT_MODEL;
+  let model = raw.trim();
+  if (
+    (model.startsWith('"') && model.endsWith('"') && model.length >= 2) ||
+    (model.startsWith("'") && model.endsWith("'") && model.length >= 2)
+  ) {
+    model = model.slice(1, -1).trim();
+  }
+
+  if (model.length === 0) {
+    console.warn('[GeminiClient] Configured GEMINI_MODEL is invalid. Falling back to default model.');
+    return DEFAULT_MODEL;
+  }
+
+  // Never allow API keys, secrets, or arbitrary tokens to be treated as model identifiers
+  if (
+    model.startsWith('AIza') ||
+    /secret|token|password|bearer|key/i.test(model)
+  ) {
+    console.warn('[GeminiClient] Configured GEMINI_MODEL is invalid. Falling back to default model.');
+    return DEFAULT_MODEL;
+  }
+
+  // Safe model identifier: must start with 'gemini-', followed by alphanumeric, dot, hyphen, or underscore (8-64 chars total)
+  if (/^gemini-[a-zA-Z0-9_.-]{1,57}$/.test(model)) {
+    return model;
+  }
+
+  console.warn('[GeminiClient] Configured GEMINI_MODEL is invalid. Falling back to default model.');
+  return DEFAULT_MODEL;
+}
+
+/**
  * Sanitizes and extracts the API key from environment variables.
  * Trims whitespace and strips matching outer quotation marks (single or double).
  */
@@ -55,7 +96,7 @@ export async function callGeminiApi(
   responseSchema?: any
 ): Promise<GeminiCallResult> {
   const apiKey = sanitizeApiKey(process.env.GEMINI_API_KEY);
-  const model = DEFAULT_MODEL;
+  const model = resolveModel();
 
   if (!apiKey) {
     return {
@@ -68,6 +109,9 @@ export async function callGeminiApi(
       },
     };
   }
+
+  // Safe diagnostic log: record effective model once per Gemini request (prior to retry loop)
+  console.log(`[GeminiClient] Active model: ${model}`);
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
